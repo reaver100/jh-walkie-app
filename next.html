@@ -215,11 +215,36 @@
      신호 서버에 죽은 자리가 쌓여도 영향을 받지 않는다. */
   var LEGACY = 24;                /* 옛 방식(자리 번호)으로 들어온 기기를 위한 범위 */
   var KEYS_KEY = "jhwt.keys", DEV_KEY = "jhwt.devkey";
+
+  /* 가족이 아닌 이름(점검용 등)은 저장 목록에서 지운다 */
+  function familyName(nm){
+    for(var i=0;i<ROSTER.length;i++) if(ROSTER[i].name === nm) return true;
+    return false;
+  }
+  function tidyLists(){
+    try{
+      var k = JSON.parse(localStorage.getItem("jhwt.known") || "[]");
+      var k2 = k.filter(familyName);
+      if(k2.length !== k.length) localStorage.setItem("jhwt.known", JSON.stringify(k2));
+    }catch(e){}
+    ["jhwt.keys","jhwt.pid"].forEach(function(key){
+      try{
+        var m = JSON.parse(localStorage.getItem(key) || "{}"), changed = false;
+        Object.keys(m).forEach(function(nm){ if(!familyName(nm)){ delete m[nm]; changed = true; } });
+        if(changed) localStorage.setItem(key, JSON.stringify(m));
+      }catch(e){}
+    });
+    try{
+      var r = JSON.parse(localStorage.getItem("jhwt.roster") || "[]");
+      var r2 = r.filter(function(x){ return familyName(x.name); });
+      if(r2.length !== r.length) localStorage.setItem("jhwt.roster", JSON.stringify(r2));
+    }catch(e){}
+  }
   var myKey = "", myPeerId = "", dialV = {};
 
   function keyStore(){ try{ return JSON.parse(localStorage.getItem(KEYS_KEY)||"{}"); }catch(e){ return {}; } }
   function rememberKey(nm, k){
-    if(!nm || !k || nm === myName) return;
+    if(!nm || !k || nm === myName || !familyName(nm)) return;
     var m = keyStore(); if(m[nm] === k) return;
     m[nm] = k; try{ localStorage.setItem(KEYS_KEY, JSON.stringify(m)); }catch(e){}
   }
@@ -683,7 +708,13 @@
   joinBtn.onclick = async function(){
     var n = (nmEl.value||"").trim().slice(0,12);
     if(!n){ toast("이름을 입력하세요"); return; }
-    channel = CHANNEL; myName = n;
+    channel = CHANNEL;
+    try{   /* 점검용 별도 채널 — 가족 채널에는 섞이지 않는다 */
+      var q = new URLSearchParams(location.search).get("ch");
+      if(q && /^test-[a-z0-9]{1,12}$/.test(q)) channel = q;
+    }catch(e){}
+    myName = n;
+    tidyLists();
     await initKey();
     try{ localStorage.setItem("wt", JSON.stringify({n:n})); }catch(e){}
 
@@ -817,7 +848,7 @@
     try{ return JSON.parse(localStorage.getItem(PID_KEY) || "{}"); }catch(e){ return {}; }
   }
   function rememberPid(nm, pid){
-    if(!nm || !pid || !/^[a-f0-9]{32}$/.test(pid)) return;
+    if(!nm || !pid || !/^[a-f0-9]{32}$/.test(pid) || !familyName(nm)) return;
     var m = pidMap();
     if(m[nm] === pid) return;
     m[nm] = pid;
@@ -870,7 +901,7 @@
     try{ return JSON.parse(localStorage.getItem(KNOWN_KEY) || "[]"); }catch(e){ return []; }
   }
   function rememberName(nm){
-    if(!nm || nm === "이름 확인 중") return;
+    if(!nm || nm === "이름 확인 중" || !familyName(nm)) return;
     var list = knownNames();
     if(list.indexOf(nm) >= 0) return;
     list.push(nm);
