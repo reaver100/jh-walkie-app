@@ -183,7 +183,7 @@
 (function(){
   "use strict";
 
-  var SLOTS = 8, NS = "jhwt", CHANNEL = "our-family";
+  var SLOTS = 24, NS = "jhwt", CHANNEL = "our-family";
   var $ = function(id){ return document.getElementById(id); };
   var setup=$("setup"), live=$("live"), pill=$("pill"), roster=$("roster"),
       ptt=$("ptt"), tgtEl=$("tgt"), joinBtn=$("join"), nmEl=$("nm");
@@ -194,6 +194,7 @@
   var joined=false, txing=false, txIds=[], target="";
   var wakeLock=null, ac=null, keepAlive=null;
   var scanTimer=null, pingTimer=null, memberTimer=null, rebuilding=false;
+  var probeCursor=1;
 
   /* ---------- 유틸 ---------- */
   var toastT;
@@ -417,6 +418,21 @@
     }
     return clones[id];
   }
+  /* 자리를 조금씩 나눠서 두드린다 — 한 번에 24개를 열면 폰이 버겁다 */
+  function sweep(count){
+    var tried=0, guard=0;
+    while(tried<count && guard<SLOTS){
+      guard++;
+      var k=probeCursor; probeCursor = probeCursor % SLOTS + 1;
+      if(k===mySlot) continue;
+      var id=idFor(k);
+      if(conns[id] || pending[id]) continue;
+      reach(id); tried++;
+    }
+  }
+  function fullSweep(){
+    for(var b=0;b<4;b++) setTimeout(function(){ sweep(6); }, b*1200);
+  }
   function reach(id){
     if(!peer || conns[id] || pending[id]) return;
     try{
@@ -458,7 +474,6 @@
       }
       else if(m.t==="talk"){ talking[id]=true; dmFrom[id]=!!m.dm; cueIncoming(!!m.dm); }
       else if(m.t==="stop"){ talking[id]=false; dmFrom[id]=false; }
-      else if(m.t==="bye"){ drop(id); return; }
       else if(m.t==="bye"){ drop(id); return; }
       render();
     });
@@ -539,7 +554,7 @@
       for(var i=1;i<=SLOTS;i++){ ok = await claim(i); if(ok) break; }
       if(ok){
         attachPeerHandlers();
-        for(var k=1;k<=SLOTS;k++) if(k!==mySlot) reach(idFor(k));
+        fullSweep();
         setPill();
       }else{
         setPill("재연결 실패 — 다시 시도");
@@ -552,11 +567,8 @@
     if(!joined || rebuilding) return;
     if(!peer || peer.destroyed){ rebuildPeer(); return; }
     if(peer.disconnected){ setPill("재연결 중…"); try{ peer.reconnect(); }catch(e){} }
-    // 끊긴 자리 다시 붙기
-    for(var k=1;k<=SLOTS;k++){
-      var id = idFor(k);
-      if(k!==mySlot && !conns[id]) reach(id);
-    }
+    // 끊긴 자리 다시 붙기 (한 번에 몇 개씩)
+    sweep(6);
     // 응답 없는 상대 정리
     var now = Date.now();
     openIds().forEach(function(id){
@@ -616,7 +628,7 @@
 
     joined=true;
     attachPeerHandlers();
-    for(var k=1;k<=SLOTS;k++) if(k!==mySlot) reach(idFor(k));
+    fullSweep();
     startLoops();
 
     enablePush(false);
@@ -632,8 +644,12 @@
   function sayBye(){
     openIds().forEach(function(id){ try{ conns[id].send({t:"bye"}); }catch(e){} });
   }
-  window.addEventListener("pagehide", function(e){ if(!e.persisted) sayBye(); });
-  window.addEventListener("beforeunload", sayBye);
+  function releasePeer(){
+    sayBye();
+    try{ peer && peer.destroy(); }catch(e){}   /* 서버에 자리를 바로 돌려준다 */
+  }
+  window.addEventListener("pagehide", function(e){ if(!e.persisted) releasePeer(); });
+  window.addEventListener("beforeunload", releasePeer);
   /* 다른 앱 쓰다 돌아오면 바로 명단을 새로 확인한다 (화면이 꺼진 동안은 타이머가 느려짐) */
   document.addEventListener("visibilitychange", function(){
     if(document.visibilityState === "visible" && joined){
