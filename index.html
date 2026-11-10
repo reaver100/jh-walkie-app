@@ -515,12 +515,71 @@
     for(var n=1; n<=SLOTS; n++) if(await claimId(idFor(n), n)) return true;   /* 마지막 수단 */
     return false;
   }
+  /* 마이크를 들고 있으면 아이폰이 블루투스 이어폰을 통화 모드로 바꿔
+     듣던 음악이 끊긴다. 그래서 말할 때만 잡고, 2분 조용하면 놓는다.
+     음성 연결 자체는 끊지 않고 '무음 트랙'으로 유지해 양방향을 지킨다. */
+  var MIC_HOLD = 120000;
+  var silentDst = null, micTimer = null, outTrack = {}, pttHeld = false;
+
+  function silentTrack(){
+    audioCtx();
+    if(!silentDst){
+      silentDst = ac.createMediaStreamDestination();
+      var g = ac.createGain(); g.gain.value = 0;
+      var o = ac.createOscillator(); o.connect(g); g.connect(silentDst);
+      try{ o.start(); }catch(e){}
+    }
+    return silentDst.stream.getAudioTracks()[0].clone();
+  }
   function streamFor(id){
     if(!clones[id]){
-      var c = micTrack.clone(); c.enabled=false;
-      clones[id] = new MediaStream([c]);
+      var t = micTrack ? micTrack.clone() : silentTrack();
+      t.enabled = false;
+      outTrack[id] = t;
+      clones[id] = new MediaStream([t]);
     }
     return clones[id];
+  }
+  /* 지금 보내고 있는 트랙을 통째로 갈아끼운다 (연결은 그대로) */
+  function swapOut(id, track){
+    var mc = calls[id];
+    if(mc && mc.peerConnection){
+      try{
+        var sn = mc.peerConnection.getSenders().filter(function(x){
+          return x.track && x.track.kind === "audio";
+        })[0];
+        if(sn) sn.replaceTrack(track);
+      }catch(e){}
+    }
+    if(outTrack[id] && outTrack[id] !== track){ try{ outTrack[id].stop(); }catch(e){} }
+    outTrack[id] = track;
+    clones[id] = new MediaStream([track]);
+  }
+  function micHoldBump(){
+    clearTimeout(micTimer);
+    micTimer = setTimeout(function(){ if(!txing && !pttHeld) releaseMic(); }, MIC_HOLD);
+  }
+  async function acquireMic(){
+    if(micTrack && micTrack.readyState === "live"){ micHoldBump(); return true; }
+    var p;
+    try{
+      p = navigator.mediaDevices.getUserMedia({
+        audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false
+      });
+    }catch(e){ return false; }
+    try{ micStream = await p; }catch(e){ return false; }
+    micTrack = micStream.getAudioTracks()[0];
+    Object.keys(conns).forEach(function(id){
+      var t = micTrack.clone(); t.enabled = false; swapOut(id, t);
+    });
+    micHoldBump();
+    return true;
+  }
+  function releaseMic(){
+    clearTimeout(micTimer); micTimer = null;
+    Object.keys(conns).forEach(function(id){ swapOut(id, silentTrack()); });
+    if(micStream){ try{ micStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){} }
+    micStream = null; micTrack = null;
   }
   /* 자리를 조금씩 나눠서 두드린다 — 한 번에 24개를 열면 폰이 버겁다 */
   function sweep(count){
@@ -635,6 +694,7 @@
     delete conns[id]; delete pending[id]; delete calls[id]; delete names[id];
     delete talking[id]; delete dmFrom[id]; delete lastSeen[id];
     if(clones[id]){ clones[id].getTracks().forEach(function(t){t.stop();}); delete clones[id]; }
+    if(outTrack[id]){ try{ outTrack[id].stop(); }catch(e){} delete outTrack[id]; }
     var el=document.getElementById("a-"+id); if(el) el.remove();
     if(target===id) target="";
     if(joined) render();
@@ -752,34 +812,13 @@
       if(q && /^test-[a-z0-9]{1,12}$/.test(q)) channel = q;
     }catch(e){}
     myName = n;
-
-    /* 아이폰은 버튼을 누른 직후에만 마이크 팝업을 띄운다.
-       앞에 기다리는 작업이 하나라도 끼면 팝업이 아예 안 뜬다.
-       그래서 마이크부터 요청하고, 나머지는 그 뒤에 한다. */
-    joinBtn.disabled=true; joinBtn.textContent="마이크 확인 중…";
-    audioCtx();
-    var micP = null;
     try{
-      micP = navigator.mediaDevices.getUserMedia({
-        audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false
-      });
+      var mt = new URLSearchParams(location.search).get("mict");
+      if(mt && /^test-/.test(channel)) MIC_HOLD = Math.max(2000, parseInt(mt,10)*1000);
     }catch(e){}
-    try{
-      micStream = await micP;
-    }catch(e){
-      joinBtn.disabled=false; joinBtn.textContent="접속하기";
-      toast(e && e.name === "NotAllowedError"
-        ? "마이크가 차단되어 있습니다. 설정에서 마이크를 허용해 주세요"
-        : "마이크를 쓸 수 없습니다: " + ((e && e.name) || e));
-      return;
-    }
-    if(!micStream){
-      joinBtn.disabled=false; joinBtn.textContent="접속하기";
-      toast("마이크를 쓸 수 없습니다");
-      return;
-    }
-    micTrack = micStream.getAudioTracks()[0];
 
+    joinBtn.disabled=true; joinBtn.textContent="채널 접속 중…";
+    audioCtx();
     tidyLists();
     await initKey();
     try{ localStorage.setItem("wt", JSON.stringify({n:n})); }catch(e){}
@@ -789,7 +828,6 @@
     ok = await claimMine();
     if(!ok){
       joinBtn.disabled=false; joinBtn.textContent="접속하기";
-      micStream.getTracks().forEach(function(t){t.stop();});
       toast("채널이 가득 찼거나 연결에 실패했습니다");
       return;
     }
@@ -830,7 +868,7 @@
   });
 
   $("leave").onclick = function(){
-    joined=false; stopTx(); stopLoops();
+    joined=false; stopTx(); releaseMic(); stopLoops();
     openIds().forEach(function(id){ try{ conns[id].send({t:"bye"}); }catch(e){} });
     Object.keys(conns).forEach(drop);
     if(micStream) micStream.getTracks().forEach(function(t){t.stop();});
@@ -845,14 +883,38 @@
   };
 
   /* ---------- PTT ---------- */
-  function startTx(){
-    if(!joined || txing || !micTrack) return;
+  async function startTx(){
+    if(!joined || txing) return;
     stopRing();
     if(!target){ toast("명단에서 보낼 사람을 먼저 골라 주세요"); return; }
-    txIds = (conns[target] && conns[target].open) ? [target] : [];
-    if(!txIds.length){ toast("상대가 연결되어 있지 않습니다"); return; }
-    txing=true;
+    if(!(conns[target] && conns[target].open)){ toast("상대가 연결되어 있지 않습니다"); return; }
+    pttHeld = true;
     audioCtx();
+
+    if(!micTrack || micTrack.readyState !== "live"){
+      ptt.classList.add("down"); ptt.textContent="마이크 켜는 중…";
+      var ok = await acquireMic();
+      if(!ok){
+        pttHeld = false;
+        ptt.classList.remove("down"); ptt.textContent="누르고 말하기";
+        toast("마이크 권한이 필요합니다. 설정에서 마이크를 허용해 주세요");
+        return;
+      }
+      if(!pttHeld){                      /* 기다리는 사이에 손을 뗐다 */
+        ptt.classList.remove("down"); ptt.textContent="누르고 말하기";
+        micHoldBump();
+        return;
+      }
+    }
+    micHoldBump();
+
+    txIds = (conns[target] && conns[target].open) ? [target] : [];
+    if(!txIds.length){
+      pttHeld = false;
+      ptt.classList.remove("down"); ptt.textContent="누르고 말하기";
+      toast("상대가 연결되어 있지 않습니다"); return;
+    }
+    txing=true;
     txIds.forEach(function(id){
       streamFor(id).getAudioTracks().forEach(function(t){ t.enabled=true; });
       try{ conns[id].send({t:"talk", dm: true}); }catch(e){}
@@ -861,8 +923,10 @@
     beep(1100,0.07,0.05); buzz(25);
   }
   function stopTx(){
-    if(!txing) return;
+    pttHeld = false;
+    if(!txing){ if(micTrack) micHoldBump(); return; }
     txing=false;
+    micHoldBump();
     txIds.forEach(function(id){
       if(clones[id]) clones[id].getAudioTracks().forEach(function(t){ t.enabled=false; });
       try{ conns[id] && conns[id].send({t:"stop"}); }catch(e){}
