@@ -650,7 +650,8 @@
     dialKnown();
     // 옛 방식으로 들어온 기기가 있을 수 있으니 가끔만 훑는다
     legacyTick++;
-    if(legacyTick % 5 === 0) sweep(4);
+    /* 접속 직후 1분은 빠르게, 그 뒤에는 가끔만 */
+    if(legacyTick <= 15 || legacyTick % 5 === 0) sweep(4);
     // 응답 없는 상대 정리
     var now = Date.now();
     openIds().forEach(function(id){
