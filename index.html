@@ -248,6 +248,7 @@
     var m = keyStore(); if(m[nm] === k) return;
     m[nm] = k; try{ localStorage.setItem(KEYS_KEY, JSON.stringify(m)); }catch(e){}
   }
+  try{ tidyLists(); }catch(e){}
   function devKey(){
     var k = "";
     try{ k = localStorage.getItem(DEV_KEY) || ""; }catch(e){}
@@ -557,12 +558,7 @@
       conns[id] = dc;
       lastSeen[id] = Date.now();
       dc.send({t:"hi", name:myName, pid:myPid, key:myKey});
-      if(!calls[id]){
-        try{
-          var mc = peer.call(id, streamFor(id), {metadata:{name:myName}});
-          wireCall(mc);
-        }catch(e){}
-      }
+      placeCall(id);
       render();
     });
     dc.on("data", function(m){
@@ -585,6 +581,23 @@
     dc.on("close", function(){ drop(id); });
     dc.on("error", function(){ drop(id); });
   }
+  /* 한 쌍에 음성 연결은 하나만 둔다. 둘 다 걸면 하나가 끊기며 소리가 끊긴다 */
+  var callTry = {};
+  function placeCall(id, force){
+    if(!peer || calls[id]) return;
+    if(!force && myPeerId && id < myPeerId) return;   /* 작은 쪽이 건다 */
+    var now = Date.now();
+    if(callTry[id] && now - callTry[id] < 6000) return;
+    callTry[id] = now;
+    try{
+      var mc = peer.call(id, streamFor(id), {metadata:{name:myName}});
+      wireCall(mc);
+    }catch(e){}
+  }
+  function clearAudio(id){
+    var el = document.getElementById("a-"+id);
+    if(el){ try{ el.srcObject = null; }catch(e){} }
+  }
   function wireCall(mc){
     var id = mc.peer;
     calls[id]=mc;
@@ -598,8 +611,12 @@
       el.srcObject = rs;
       var pr = el.play(); if(pr && pr.catch) pr.catch(function(){});
     });
-    mc.on("close", function(){ delete calls[id]; });
-    mc.on("error", function(){ delete calls[id]; });
+    mc.on("close", function(){
+      if(calls[id] === mc){ delete calls[id]; clearAudio(id); }
+    });
+    mc.on("error", function(){
+      if(calls[id] === mc){ delete calls[id]; clearAudio(id); }
+    });
   }
   function drop(id){
     try{ conns[id] && conns[id].close(); }catch(e){}
@@ -623,7 +640,12 @@
 
   function attachPeerHandlers(){
     peer.on("connection", function(dc){ wireData(dc, true); });
-    peer.on("call", function(mc){ mc.answer(streamFor(mc.peer)); wireCall(mc); });
+    peer.on("call", function(mc){
+      var pid2 = mc.peer;
+      if(calls[pid2] && calls[pid2] !== mc){ try{ calls[pid2].close(); }catch(e){} delete calls[pid2]; }
+      mc.answer(streamFor(pid2));
+      wireCall(mc);
+    });
     peer.on("error", function(e){
       if(!e) return;
       if(e.type==="peer-unavailable"){
@@ -677,11 +699,15 @@
     legacyTick++;
     /* 접속 직후 1분은 빠르게, 그 뒤에는 가끔만 */
     if(legacyTick <= 15 || legacyTick % 5 === 0) sweep(4);
+    // 붙어 있는데 음성 연결이 없으면 다시 건다
+    openIds().forEach(function(id){
+      if(!calls[id]) placeCall(id, true);
+    });
     // 응답 없는 상대 정리
     var now = Date.now();
     openIds().forEach(function(id){
       if(!lastSeen[id]) lastSeen[id] = now;
-      if(now - lastSeen[id] > 30000) drop(id);
+      if(now - lastSeen[id] > 60000) drop(id);
     });
     if(!rebuilding && peer && !peer.disconnected) setPill();
   }
@@ -763,11 +789,13 @@
     sayBye();
     try{ peer && peer.destroy(); }catch(e){}   /* 서버에 자리를 바로 돌려준다 */
   }
-  window.addEventListener("pagehide", function(e){ if(!e.persisted) releasePeer(); });
+  /* 안드로이드는 화면만 꺼도 pagehide 가 온다 — 여기서는 연결을 끊지 않는다 */
+  window.addEventListener("pagehide", function(e){ if(!e.persisted) sayBye(); });
   window.addEventListener("beforeunload", releasePeer);
   /* 다른 앱 쓰다 돌아오면 바로 명단을 새로 확인한다 (화면이 꺼진 동안은 타이머가 느려짐) */
   document.addEventListener("visibilitychange", function(){
     if(document.visibilityState === "visible" && joined){
+      if(peer && peer.disconnected){ try{ peer.reconnect(); }catch(e){} }
       try{ watchdog(); }catch(e){}
       loadMembers();
       openIds().forEach(function(id){ try{ conns[id].send({t:"ping"}); }catch(e){} });
