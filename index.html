@@ -752,22 +752,37 @@
       if(q && /^test-[a-z0-9]{1,12}$/.test(q)) channel = q;
     }catch(e){}
     myName = n;
-    tidyLists();
-    await initKey();
-    try{ localStorage.setItem("wt", JSON.stringify({n:n})); }catch(e){}
 
+    /* 아이폰은 버튼을 누른 직후에만 마이크 팝업을 띄운다.
+       앞에 기다리는 작업이 하나라도 끼면 팝업이 아예 안 뜬다.
+       그래서 마이크부터 요청하고, 나머지는 그 뒤에 한다. */
     joinBtn.disabled=true; joinBtn.textContent="마이크 확인 중…";
     audioCtx();
+    var micP = null;
     try{
-      micStream = await navigator.mediaDevices.getUserMedia({
+      micP = navigator.mediaDevices.getUserMedia({
         audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false
       });
+    }catch(e){}
+    try{
+      micStream = await micP;
     }catch(e){
       joinBtn.disabled=false; joinBtn.textContent="접속하기";
-      toast("마이크 권한이 필요합니다. 주소창 자물쇠 → 마이크 허용");
+      toast(e && e.name === "NotAllowedError"
+        ? "마이크가 차단되어 있습니다. 설정에서 마이크를 허용해 주세요"
+        : "마이크를 쓸 수 없습니다: " + ((e && e.name) || e));
+      return;
+    }
+    if(!micStream){
+      joinBtn.disabled=false; joinBtn.textContent="접속하기";
+      toast("마이크를 쓸 수 없습니다");
       return;
     }
     micTrack = micStream.getAudioTracks()[0];
+
+    tidyLists();
+    await initKey();
+    try{ localStorage.setItem("wt", JSON.stringify({n:n})); }catch(e){}
 
     joinBtn.textContent="채널 접속 중…";
     var ok=false;
