@@ -194,7 +194,7 @@
   var joined=false, txing=false, txIds=[], target="";
   var wakeLock=null, ac=null, keepAlive=null;
   var scanTimer=null, pingTimer=null, memberTimer=null, rebuilding=false;
-  var probeCursor=1;
+  var probeCursor=1, legacyTick=0;
 
   /* ---------- 유틸 ---------- */
   var toastT;
@@ -210,6 +210,75 @@
     return h.toString(36);
   }
   function idFor(n){ return NS+"-"+hash(channel)+"-"+n; }
+
+  /* 자리 번호 대신 각자 고유 번호로 찾아간다.
+     신호 서버에 죽은 자리가 쌓여도 영향을 받지 않는다. */
+  var LEGACY = 8;                 /* 옛 방식(자리 번호)으로 들어온 기기를 위한 범위 */
+  var KEYS_KEY = "jhwt.keys", DEV_KEY = "jhwt.devkey";
+  var myKey = "", myPeerId = "", dialV = {};
+
+  function keyStore(){ try{ return JSON.parse(localStorage.getItem(KEYS_KEY)||"{}"); }catch(e){ return {}; } }
+  function rememberKey(nm, k){
+    if(!nm || !k || nm === myName) return;
+    var m = keyStore(); if(m[nm] === k) return;
+    m[nm] = k; try{ localStorage.setItem(KEYS_KEY, JSON.stringify(m)); }catch(e){}
+  }
+  function devKey(){
+    var k = "";
+    try{ k = localStorage.getItem(DEV_KEY) || ""; }catch(e){}
+    if(!k){
+      k = Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(6)), function(b){
+        return ("0"+b.toString(16)).slice(-2);
+      }).join("");
+      try{ localStorage.setItem(DEV_KEY, k); }catch(e){}
+    }
+    return k;
+  }
+  function peerIdOf(key, v){ return NS+"-"+hash(channel)+"-"+key + (v>1 ? "-"+v : ""); }
+
+  /* 내 번호: 알림을 켰으면 등록 번호에서, 아니면 이 기기 고유값에서 */
+  async function initKey(){
+    try{
+      if("serviceWorker" in navigator && "PushManager" in window && Notification.permission === "granted"){
+        var reg = await navigator.serviceWorker.ready;
+        var sub = await reg.pushManager.getSubscription();
+        if(sub){
+          myEndpoint = sub.endpoint;
+          myPid = await pidOf(sub.endpoint);
+          myKey = myPid.slice(0,12);
+          return;
+        }
+      }
+    }catch(e){}
+    myKey = devKey();
+  }
+
+  /* 연락할 상대: 기본 명단 + 기억해 둔 번호 */
+  function targetKeys(){
+    var out = {}, pm = pidMap(), ks = keyStore();
+    ROSTER.forEach(function(r){ if(r.name !== myName) out[r.name] = r.id.slice(0,12); });
+    Object.keys(pm).forEach(function(nm){ if(nm !== myName) out[nm] = pm[nm].slice(0,12); });
+    Object.keys(ks).forEach(function(nm){ if(nm !== myName) out[nm] = ks[nm]; });
+    return out;
+  }
+  function connectedTo(key){
+    for(var v=1; v<=3; v++) if(conns[peerIdOf(key,v)]) return true;
+    return false;
+  }
+  /* 아는 상대에게만 연락한다 — 빈 자리를 뒤지지 않으니 가볍다 */
+  function dialKnown(){
+    if(!peer) return;
+    var t = targetKeys();
+    Object.keys(t).forEach(function(nm){
+      var key = t[nm];
+      if(!key || key === myKey || connectedTo(key)) return;
+      var v = dialV[nm] || 1;
+      var id = peerIdOf(key, v);
+      dialV[nm] = v >= 3 ? 1 : v + 1;
+      if(conns[id] || pending[id]) return;
+      reach(id);
+    });
+  }
 
   /* ---------- 소리 / 진동 ---------- */
   function audioCtx(){
@@ -403,13 +472,22 @@
       {urls:"stun:global.stun.twilio.com:3478"}
     ]}});
   }
-  function claim(n){
+  function claimId(id, slot){
     return new Promise(function(res){
-      var p=newPeer(idFor(n)), done=false;
-      var t=setTimeout(function(){ if(!done){ done=true; try{p.destroy();}catch(e){} res(false);} },9000);
-      p.on("open", function(){ if(done) return; done=true; clearTimeout(t); peer=p; mySlot=n; res(true); });
+      var p=newPeer(id), done=false;
+      var t=setTimeout(function(){ if(!done){ done=true; try{p.destroy();}catch(e){} res(false);} },8000);
+      p.on("open", function(){
+        if(done) return; done=true; clearTimeout(t);
+        peer=p; myPeerId=id; mySlot=slot||0; res(true);
+      });
       p.on("error", function(){ if(done) return; done=true; clearTimeout(t); try{p.destroy();}catch(e){} res(false); });
     });
+  }
+  async function claimMine(){
+    if(!myKey) await initKey();
+    for(var v=1; v<=3; v++) if(await claimId(peerIdOf(myKey, v))) return true;
+    for(var n=1; n<=SLOTS; n++) if(await claimId(idFor(n), n)) return true;   /* 마지막 수단 */
+    return false;
   }
   function streamFor(id){
     if(!clones[id]){
@@ -421,9 +499,9 @@
   /* 자리를 조금씩 나눠서 두드린다 — 한 번에 24개를 열면 폰이 버겁다 */
   function sweep(count){
     var tried=0, guard=0;
-    while(tried<count && guard<SLOTS){
+    while(tried<count && guard<LEGACY){
       guard++;
-      var k=probeCursor; probeCursor = probeCursor % SLOTS + 1;
+      var k=probeCursor; probeCursor = probeCursor % LEGACY + 1;
       if(k===mySlot) continue;
       var id=idFor(k);
       if(conns[id] || pending[id]) continue;
@@ -453,7 +531,7 @@
       delete pending[id];
       conns[id] = dc;
       lastSeen[id] = Date.now();
-      dc.send({t:"hi", name:myName, pid:myPid});
+      dc.send({t:"hi", name:myName, pid:myPid, key:myKey});
       if(!calls[id]){
         try{
           var mc = peer.call(id, streamFor(id), {metadata:{name:myName}});
@@ -471,7 +549,8 @@
         names[id]=m.name;
         rememberName(m.name);
         if(m.pid) rememberPid(m.name, m.pid);
-        if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName, pid:myPid}); }catch(e){} }
+        if(m.key) rememberKey(m.name, m.key);
+        if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName, pid:myPid, key:myKey}); }catch(e){} }
       }
       else if(m.t==="talk"){ talking[id]=true; dmFrom[id]=!!m.dm; cueIncoming(!!m.dm); }
       else if(m.t==="stop"){ talking[id]=false; dmFrom[id]=false; }
@@ -551,11 +630,10 @@
       conns={}; pending={}; calls={}; clones={}; talking={}; dmFrom={}; lastSeen={};
       peer = null;
 
-      var ok=false;
-      for(var i=1;i<=SLOTS;i++){ ok = await claim(i); if(ok) break; }
+      var ok = await claimMine();
       if(ok){
         attachPeerHandlers();
-        fullSweep();
+        dialKnown();
         setPill();
       }else{
         setPill("재연결 실패 — 다시 시도");
@@ -568,8 +646,11 @@
     if(!joined || rebuilding) return;
     if(!peer || peer.destroyed){ rebuildPeer(); return; }
     if(peer.disconnected){ setPill("재연결 중…"); try{ peer.reconnect(); }catch(e){} }
-    // 끊긴 자리 다시 붙기 (한 번에 몇 개씩)
-    sweep(6);
+    // 아는 상대에게 다시 붙기
+    dialKnown();
+    // 옛 방식으로 들어온 기기가 있을 수 있으니 가끔만 훑는다
+    legacyTick++;
+    if(legacyTick % 5 === 0) sweep(4);
     // 응답 없는 상대 정리
     var now = Date.now();
     openIds().forEach(function(id){
@@ -602,6 +683,7 @@
     var n = (nmEl.value||"").trim().slice(0,12);
     if(!n){ toast("이름을 입력하세요"); return; }
     channel = CHANNEL; myName = n;
+    await initKey();
     try{ localStorage.setItem("wt", JSON.stringify({n:n})); }catch(e){}
 
     joinBtn.disabled=true; joinBtn.textContent="마이크 확인 중…";
@@ -619,7 +701,7 @@
 
     joinBtn.textContent="채널 접속 중…";
     var ok=false;
-    for(var i=1;i<=SLOTS;i++){ ok = await claim(i); if(ok) break; }
+    ok = await claimMine();
     if(!ok){
       joinBtn.disabled=false; joinBtn.textContent="접속하기";
       micStream.getTracks().forEach(function(t){t.stop();});
@@ -629,7 +711,7 @@
 
     joined=true;
     attachPeerHandlers();
-    fullSweep();
+    dialKnown();
     startLoops();
 
     enablePush(false);
@@ -820,7 +902,18 @@
   async function ringOne(id, nm){
     if(!confirm(nm + "님을 호출할까요?\n폰이 꺼져 있어도 알림이 울립니다.")) return;
     try{
-      var j = await apiSend("call", { from: myName, to: id, exclude: myEndpoint });
+      /* 상대가 알림을 다시 켜면 번호가 바뀐다.
+         아는 번호가 여러 개면 모두 보낸다 — 죽은 번호는 아무 일도 일어나지 않는다 */
+      var tries = [], pm = pidMap();
+      function add(x){ if(x && /^[a-f0-9]{32}$/.test(x) && tries.indexOf(x) < 0) tries.push(x); }
+      add(id); add(pm[nm]);
+      for(var r=0;r<ROSTER.length;r++) if(ROSTER[r].name === nm) add(ROSTER[r].id);
+      for(var mi=0;mi<members.length;mi++) if(members[mi].name === nm) add(members[mi].id);
+
+      var j = { blind:true };
+      for(var ti=0; ti<tries.length; ti++){
+        j = await apiSend("call", { from: myName, to: tries[ti], exclude: myEndpoint });
+      }
       if(j.blind){ toast(nm + "님에게 호출을 보냈습니다"); return; }
       toast(j.sent ? (nm + "님을 호출했습니다") : (nm + "님에게 보내지 못했습니다"));
       if(j.gone) loadMembers();
@@ -866,7 +959,7 @@
       if(!j.ok) throw new Error(j.err || "등록 실패");
       myEndpoint = sub.endpoint;
       try{ myPid = await pidOf(sub.endpoint); }catch(e){}
-      openIds().forEach(function(id){ try{ conns[id].send({t:"hi", name:myName, pid:myPid}); }catch(e){} });
+      openIds().forEach(function(id){ try{ conns[id].send({t:"hi", name:myName, pid:myPid, key:myKey}); }catch(e){} });
       rememberName(nm);
       pushUI();
       loadMembers();

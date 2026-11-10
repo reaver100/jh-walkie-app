@@ -902,7 +902,18 @@
   async function ringOne(id, nm){
     if(!confirm(nm + "님을 호출할까요?\n폰이 꺼져 있어도 알림이 울립니다.")) return;
     try{
-      var j = await apiSend("call", { from: myName, to: id, exclude: myEndpoint });
+      /* 상대가 알림을 다시 켜면 번호가 바뀐다.
+         아는 번호가 여러 개면 모두 보낸다 — 죽은 번호는 아무 일도 일어나지 않는다 */
+      var tries = [], pm = pidMap();
+      function add(x){ if(x && /^[a-f0-9]{32}$/.test(x) && tries.indexOf(x) < 0) tries.push(x); }
+      add(id); add(pm[nm]);
+      for(var r=0;r<ROSTER.length;r++) if(ROSTER[r].name === nm) add(ROSTER[r].id);
+      for(var mi=0;mi<members.length;mi++) if(members[mi].name === nm) add(members[mi].id);
+
+      var j = { blind:true };
+      for(var ti=0; ti<tries.length; ti++){
+        j = await apiSend("call", { from: myName, to: tries[ti], exclude: myEndpoint });
+      }
       if(j.blind){ toast(nm + "님에게 호출을 보냈습니다"); return; }
       toast(j.sent ? (nm + "님을 호출했습니다") : (nm + "님에게 보내지 못했습니다"));
       if(j.gone) loadMembers();
