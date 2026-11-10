@@ -453,7 +453,7 @@
       delete pending[id];
       conns[id] = dc;
       lastSeen[id] = Date.now();
-      dc.send({t:"hi", name:myName});
+      dc.send({t:"hi", name:myName, pid:myPid});
       if(!calls[id]){
         try{
           var mc = peer.call(id, streamFor(id), {metadata:{name:myName}});
@@ -470,7 +470,8 @@
       if(m.t==="hi"){
         names[id]=m.name;
         rememberName(m.name);
-        if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName}); }catch(e){} }
+        if(m.pid) rememberPid(m.name, m.pid);
+        if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName, pid:myPid}); }catch(e){} }
       }
       else if(m.t==="talk"){ talking[id]=true; dmFrom[id]=!!m.dm; cueIncoming(!!m.dm); }
       else if(m.t==="stop"){ talking[id]=false; dmFrom[id]=false; }
@@ -717,7 +718,40 @@
 
   /* ---------- 푸시 호출 (앱이 꺼져 있어도 울림) ---------- */
   var VAPID_PUB = "BFdAOvacqW4B7n5n_6BO-8_bRjlj_6j-f3nKOR_RBsJXVgdplNzPclY36bZ9dE4OVHBjv2h_OUd5EdcGpMAyMPA";
-  var myEndpoint = "", members = [];
+  var myEndpoint = "", members = [], myPid = "";
+
+  /* 서버는 등록 주소를 SHA-256 으로 줄여 번호로 쓴다. 같은 방식으로 내 번호를 구한다 */
+  async function pidOf(endpoint){
+    var h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+    var a = Array.prototype.map.call(new Uint8Array(h), function(b){
+      return ("0"+b.toString(16)).slice(-2);
+    }).join("");
+    return a.slice(0,32);
+  }
+  /* 가족이 알림을 다시 켜면 번호가 바뀐다 — 서로 만났을 때 주고받아 기억해 둔다 */
+  var PID_KEY = "jhwt.pid";
+  function pidMap(){
+    try{ return JSON.parse(localStorage.getItem(PID_KEY) || "{}"); }catch(e){ return {}; }
+  }
+  function rememberPid(nm, pid){
+    if(!nm || !pid || !/^[a-f0-9]{32}$/.test(pid)) return;
+    var m = pidMap();
+    if(m[nm] === pid) return;
+    m[nm] = pid;
+    try{ localStorage.setItem(PID_KEY, JSON.stringify(m)); }catch(e){}
+    applyPids();
+  }
+  /* 기억해 둔 번호를 명단에 덮어쓴다 */
+  function applyPids(){
+    var m = pidMap(), changed = false;
+    Object.keys(m).forEach(function(nm){
+      var hit = null;
+      for(var i=0;i<members.length;i++) if(members[i].name === nm) hit = members[i];
+      if(hit){ if(hit.id !== m[nm]){ hit.id = m[nm]; changed = true; } }
+      else { members.push({ id:m[nm], name:nm, at:0 }); changed = true; }
+    });
+    if(changed && joined) render();
+  }
 
   /* 알림 서버는 넷리파이에 있다. 다른 주소에서 열어도 그쪽으로 보낸다 */
   var API = (location.host.indexOf("jh-walkie.netlify.app") >= 0) ? "" : "https://jh-walkie.netlify.app";
@@ -739,11 +773,11 @@
 
   /* 서버 명단을 읽을 수 없을 때 쓰는 기본 명단 */
   var ROSTER = [
-    { id:"832a5507be63b4a696cd5cff01046539", name:"아빠" },
+    { id:"3780688c546bbc5ab27be58c8875f0cb", name:"아빠" },
     { id:"27eb3372152d48b97131fbd258790dba", name:"엄마" },
-    { id:"dd200b9764286563909c650c9096fd38", name:"아라" },
-    { id:"77c3c2c431b7b5c26a09d832f890ee06", name:"테블릿" },
-    { id:"42f2bd193d130673a50c2e32e76e94d6", name:"이든" }
+    { id:"ea4edbbe6a17cd72a22d69a4f4268289", name:"아라" },
+    { id:"32fc9ac4b2db3b62a50843dac758490d", name:"테블릿" },
+    { id:"54c233007641913f57a6a404b3726824", name:"이든" }
   ];
   var ROSTER_KEY = "jhwt.roster";
 
@@ -768,6 +802,7 @@
         members = j.members;
         for(var i=0;i<members.length;i++) rememberName(members[i].name);
         try{ localStorage.setItem(ROSTER_KEY, JSON.stringify(members)); }catch(e){}
+        applyPids();
         if(joined) render();
         return;
       }
@@ -776,7 +811,8 @@
     if(!members.length){
       var saved = [];
       try{ saved = JSON.parse(localStorage.getItem(ROSTER_KEY) || "[]"); }catch(e){}
-      members = (saved.length ? saved : ROSTER);
+      members = (saved.length ? saved : ROSTER.slice());
+      applyPids();
       if(joined) render();
     }
   }
@@ -829,6 +865,8 @@
       var j = await apiSend("subs", { name: nm, sub: sub });
       if(!j.ok) throw new Error(j.err || "등록 실패");
       myEndpoint = sub.endpoint;
+      try{ myPid = await pidOf(sub.endpoint); }catch(e){}
+      openIds().forEach(function(id){ try{ conns[id].send({t:"hi", name:myName, pid:myPid}); }catch(e){} });
       rememberName(nm);
       pushUI();
       loadMembers();
