@@ -537,8 +537,10 @@
   function fullSweep(){
     for(var b=0;b<4;b++) setTimeout(function(){ sweep(6); }, b*1200);
   }
+  function pendingCount(){ return Object.keys(pending).length; }
   function reach(id){
     if(!peer || conns[id] || pending[id]) return;
+    if(pendingCount() >= 6) return;          /* 한꺼번에 너무 많이 열지 않는다 */
     try{
       var dc = peer.connect(id, {reliable:true, metadata:{name:myName}});
       wireData(dc, false);
@@ -551,7 +553,7 @@
     if(incoming && dc.metadata && dc.metadata.name) names[id] = dc.metadata.name;
     pending[id] = dc;
     setTimeout(function(){
-      if(pending[id] === dc && !(conns[id])){ try{ dc.close(); }catch(e){} delete pending[id]; }
+      if(pending[id] === dc && !(conns[id])){ closePC(dc); delete pending[id]; }
     }, 12000);
     dc.on("open", function(){
       delete pending[id];
@@ -612,13 +614,21 @@
       var pr = el.play(); if(pr && pr.catch) pr.catch(function(){});
     });
     mc.on("close", function(){
+      closePC(mc);
       if(calls[id] === mc){ delete calls[id]; clearAudio(id); }
     });
     mc.on("error", function(){
+      closePC(mc);
       if(calls[id] === mc){ delete calls[id]; clearAudio(id); }
     });
   }
+  /* 닫지 않은 연결이 쌓이면 브라우저 한도에 걸려 더는 연결을 못 만든다 */
+  function closePC(o){
+    try{ o && o.peerConnection && o.peerConnection.close(); }catch(e){}
+    try{ o && o.close(); }catch(e){}
+  }
   function drop(id){
+    closePC(conns[id]); closePC(pending[id]); closePC(calls[id]);
     try{ conns[id] && conns[id].close(); }catch(e){}
     try{ pending[id] && pending[id].close(); }catch(e){}
     try{ calls[id] && calls[id].close(); }catch(e){}
@@ -642,7 +652,7 @@
     peer.on("connection", function(dc){ wireData(dc, true); });
     peer.on("call", function(mc){
       var pid2 = mc.peer;
-      if(calls[pid2] && calls[pid2] !== mc){ try{ calls[pid2].close(); }catch(e){} delete calls[pid2]; }
+      if(calls[pid2] && calls[pid2] !== mc){ closePC(calls[pid2]); delete calls[pid2]; }
       mc.answer(streamFor(pid2));
       wireCall(mc);
     });
@@ -669,7 +679,9 @@
     setPill("재연결 중…");
     try{
       try{ peer && peer.destroy(); }catch(e){}
-      Object.keys(conns).forEach(function(id){ try{ conns[id].close(); }catch(e){} });
+      Object.keys(conns).forEach(function(id){ closePC(conns[id]); });
+      Object.keys(pending).forEach(function(id){ closePC(pending[id]); });
+      Object.keys(calls).forEach(function(id){ closePC(calls[id]); });
       Object.keys(clones).forEach(function(id){
         clones[id].getTracks().forEach(function(t){ t.stop(); });
       });
@@ -697,8 +709,8 @@
     dialKnown();
     // 옛 방식으로 들어온 기기가 있을 수 있으니 가끔만 훑는다
     legacyTick++;
-    /* 접속 직후 1분은 빠르게, 그 뒤에는 가끔만 */
-    if(legacyTick <= 15 || legacyTick % 5 === 0) sweep(4);
+    /* 아무도 안 붙어 있을 때만 옛 자리를 훑는다 — 연결 객체를 아끼기 위해 */
+    if(!openIds().length && (legacyTick <= 15 || legacyTick % 5 === 0)) sweep(2);
     // 붙어 있는데 음성 연결이 없으면 다시 건다
     openIds().forEach(function(id){
       if(!calls[id]) placeCall(id, true);
