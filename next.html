@@ -1166,7 +1166,7 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "22", newV = "", applying = false;
+  var APPV = "23", newV = "", applying = false;
   async function checkVersion(){
     if(applying) return;
     try{
@@ -1196,7 +1196,8 @@
       }
     }catch(e){}
     setTimeout(function(){
-      var u = location.pathname + (joined ? "?join=1" : "") + "#v" + newV;
+      /* 주소에 버전을 붙여야 브라우저가 옛 파일을 내주지 않는다 */
+      var u = location.pathname + "?v=" + encodeURIComponent(newV) + (joined ? "&join=1" : "");
       location.replace(u);
     }, 1200);
   }
