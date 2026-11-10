@@ -1162,6 +1162,49 @@
   if(/[?&]join=1/.test(location.search) && nmEl.value.trim()){
     setTimeout(function(){ if(!joined) joinBtn.click(); }, 400);
   }
+
+  /* ---------- 새 버전 자동 반영 ----------
+     앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
+     말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
+  var APPV = "21", newV = "", applying = false;
+  async function checkVersion(){
+    if(applying) return;
+    try{
+      var r = await fetch("version.json?t=" + Date.now(), { cache:"no-store" });
+      if(!r.ok) return;
+      var j = await r.json();
+      if(!j || !j.v || j.v === APPV) return;
+      newV = j.v;
+      applyUpdate();
+    }catch(e){}
+  }
+  function busy(){
+    if(txing || pttHeld) return true;
+    for(var k in talking) if(talking[k]) return true;
+    return false;
+  }
+  function applyUpdate(){
+    if(!newV || applying) return;
+    if(busy()){ setTimeout(applyUpdate, 5000); return; }   /* 대화 중이면 미룬다 */
+    applying = true;
+    toast("새 버전 적용 중…");
+    try{
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        navigator.serviceWorker.getRegistrations().then(function(rs){
+          rs.forEach(function(x){ try{ x.update(); }catch(e){} });
+        });
+      }
+    }catch(e){}
+    setTimeout(function(){
+      var u = location.pathname + (joined ? "?join=1" : "") + "#v" + newV;
+      location.replace(u);
+    }, 1200);
+  }
+  setTimeout(checkVersion, 15000);
+  setInterval(checkVersion, 300000);                        /* 5분마다 */
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "visible") checkVersion();
+  });
 })();
 </script>
 </body>
