@@ -6,7 +6,7 @@
   "start_url": "/jh-walkie-app/",
   "scope": "/jh-walkie-app/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
   "lang": "ko",
