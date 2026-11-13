@@ -302,22 +302,24 @@
     Object.keys(ks).forEach(function(nm){ if(nm !== myName) out[nm] = ks[nm]; });
     return out;
   }
+  var VARIANTS = 6;
   function connectedTo(key){
-    for(var v=1; v<=3; v++) if(conns[peerIdOf(key,v)]) return true;
+    for(var v=1; v<=VARIANTS; v++) if(conns[peerIdOf(key,v)]) return true;
     return false;
   }
   /* 아는 상대에게만 연락한다 — 빈 자리를 뒤지지 않으니 가볍다 */
+  /* 유령이 원래 자리를 막고 있어도 바로 찾도록, 변형 자리를 한꺼번에 두드린다 */
   function dialKnown(){
     if(!peer) return;
     var t = targetKeys();
     Object.keys(t).forEach(function(nm){
       var key = t[nm];
       if(!key || key === myKey || connectedTo(key)) return;
-      var v = dialV[nm] || 1;
-      var id = peerIdOf(key, v);
-      dialV[nm] = v >= 3 ? 1 : v + 1;
-      if(conns[id] || pending[id]) return;
-      reach(id);
+      for(var v=1; v<=VARIANTS; v++){
+        var id = peerIdOf(key, v);
+        if(conns[id] || pending[id]) continue;
+        reach(id);
+      }
     });
   }
 
@@ -526,7 +528,7 @@
   }
   async function claimMine(){
     if(!myKey) await initKey();
-    for(var v=1; v<=3; v++) if(await claimId(peerIdOf(myKey, v))) return true;
+    for(var v=1; v<=VARIANTS; v++) if(await claimId(peerIdOf(myKey, v))) return true;
     for(var n=1; n<=SLOTS; n++) if(await claimId(idFor(n), n)) return true;   /* 마지막 수단 */
     return false;
   }
@@ -614,7 +616,7 @@
   function pendingCount(){ return Object.keys(pending).length; }
   function reach(id){
     if(!peer || conns[id] || pending[id]) return;
-    if(pendingCount() >= 6) return;          /* 한꺼번에 너무 많이 열지 않는다 */
+    if(pendingCount() >= 16) return;         /* 한꺼번에 너무 많이 열지 않는다 */
     try{
       var dc = peer.connect(id, {reliable:true, metadata:{name:myName}});
       wireData(dc, false);
@@ -628,7 +630,7 @@
     pending[id] = dc;
     setTimeout(function(){
       if(pending[id] === dc && !(conns[id])){ closePC(dc); delete pending[id]; }
-    }, 12000);
+    }, 7000);
     dc.on("open", function(){
       delete pending[id];
       conns[id] = dc;
@@ -873,8 +875,23 @@
   window.addEventListener("pagehide", function(e){ if(!e.persisted) sayBye(); });
   window.addEventListener("beforeunload", releasePeer);
   /* 다른 앱 쓰다 돌아오면 바로 명단을 새로 확인한다 (화면이 꺼진 동안은 타이머가 느려짐) */
+  /* 화면이 꺼지면 페이지가 멈춰 서버에는 살아있는 척 남는다(유령).
+     45초 이상 꺼져 있으면 자리를 반납하고, 돌아오면 바로 다시 잡는다. */
+  var hideTimer = null;
   document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "hidden" && joined){
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function(){
+        if(document.visibilityState !== "hidden" || !joined) return;
+        sayBye();
+        try{ peer && peer.destroy(); }catch(e){}
+        peer = null;
+      }, 45000);
+      return;
+    }
+    clearTimeout(hideTimer);
     if(document.visibilityState === "visible" && joined){
+      if(!peer || peer.destroyed){ rebuildPeer(); return; }
       if(peer && peer.disconnected){ try{ peer.reconnect(); }catch(e){} }
       try{ watchdog(); }catch(e){}
       loadMembers();
@@ -1181,8 +1198,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "27", newV = "", applying = false;
-  var BUILT = "2026-11-11 10:17";
+  var APPV = "28", newV = "", applying = false;
+  var BUILT = "2026-11-13 17:11";
   try{ document.getElementById("ver").textContent = "버전 " + APPV + " · " + BUILT; }catch(e){}
   async function checkVersion(){
     if(applying) return;
