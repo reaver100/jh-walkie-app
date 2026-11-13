@@ -1042,7 +1042,7 @@
   /* 서버 명단을 읽을 수 없을 때 쓰는 기본 명단 */
   var ROSTER = [
     { id:"3780688c546bbc5ab27be58c8875f0cb", name:"아빠" },
-    { id:"27eb3372152d48b97131fbd258790dba", name:"엄마" },
+    { id:"b0874d299fcdefcb9e6ee2b2412b6995", name:"엄마" },
     { id:"ea4edbbe6a17cd72a22d69a4f4268289", name:"아라" },
     { id:"32fc9ac4b2db3b62a50843dac758490d", name:"테블릿" },
     { id:"54c233007641913f57a6a404b3726824", name:"이든" }
@@ -1216,8 +1216,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "29", newV = "", applying = false;
-  var BUILT = "2026-11-13 17:15";
+  var APPV = "30", newV = "", applying = false;
+  var BUILT = "2026-11-13 17:18";
   try{ document.getElementById("ver").textContent = "버전 " + APPV + " · " + BUILT; }catch(e){}
   async function checkVersion(){
     if(applying) return;
