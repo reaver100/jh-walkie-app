@@ -1,4 +1,4 @@
-var CACHE = "walkie-v32";
+var CACHE = "walkie-v34";
 var FILES = [
   "./", "./index.html", "./peerjs.min.js", "./manifest.json",
   "./icon-192.png", "./icon-512.png", "./icon-maskable.png"

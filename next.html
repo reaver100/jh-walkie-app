@@ -519,11 +519,28 @@
 
 
   /* ---------- 연결 ---------- */
+  /* 중계 서버(TURN).
+     데이터망↔와이파이처럼 직접 연결이 안 되는 조합에서도 붙게 해준다.
+     직접 연결이 가능하면 그쪽을 쓰므로 평소 음질·지연은 그대로다. */
+  var TURN_USER = "cc19afd0754ac7955e667884";
+  var TURN_PASS = "oBjiNfnbIh8lJO3Q";
+  var ICE = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
+    { urls: "turn:global.relay.metered.ca:80",                 username: TURN_USER, credential: TURN_PASS },
+    { urls: "turn:global.relay.metered.ca:80?transport=tcp",   username: TURN_USER, credential: TURN_PASS },
+    { urls: "turn:global.relay.metered.ca:443",                username: TURN_USER, credential: TURN_PASS },
+    { urls: "turns:global.relay.metered.ca:443?transport=tcp", username: TURN_USER, credential: TURN_PASS }
+  ];
+  /* 점검용: test- 채널에서 ?ice=relay 를 붙이면 중계만 쓰도록 강제한다 */
+  var FORCE_RELAY = false;
+  try{
+    FORCE_RELAY = new URLSearchParams(location.search).get("ice") === "relay";
+  }catch(e){}
   function newPeer(id){
-    return new Peer(id, { debug:0, pingInterval:3000, config:{ iceServers:[
-      {urls:"stun:stun.l.google.com:19302"},
-      {urls:"stun:global.stun.twilio.com:3478"}
-    ]}});
+    var cfg = { iceServers: ICE };
+    if(FORCE_RELAY && /^test-/.test(channel)) cfg.iceTransportPolicy = "relay";
+    return new Peer(id, { debug:0, pingInterval:3000, config: cfg });
   }
   function claimId(id, slot){
     return new Promise(function(res){
@@ -1227,8 +1244,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "32", newV = "", applying = false;
-  var BUILT = "2026-11-13 17:32";
+  var APPV = "34", newV = "", applying = false;
+  var BUILT = "2026-11-13 17:50";
   try{ document.getElementById("ver").textContent = "버전 " + APPV + " · " + BUILT; }catch(e){}
   async function checkVersion(){
     if(applying) return;
