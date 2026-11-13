@@ -1216,8 +1216,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "30", newV = "", applying = false;
-  var BUILT = "2026-11-13 17:18";
+  var APPV = "31", newV = "", applying = false;
+  var BUILT = "2026-11-13 17:21";
   try{ document.getElementById("ver").textContent = "버전 " + APPV + " · " + BUILT; }catch(e){}
   async function checkVersion(){
     if(applying) return;

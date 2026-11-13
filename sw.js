@@ -1,4 +1,4 @@
-var CACHE = "walkie-v30";
+var CACHE = "walkie-v31";
 var FILES = [
   "./", "./index.html", "./peerjs.min.js", "./manifest.json",
   "./icon-192.png", "./icon-512.png", "./icon-maskable.png"
@@ -22,8 +22,14 @@ self.addEventListener("fetch", function(e){
   if(e.request.method !== "GET") return;
   var url = new URL(e.request.url);
   if(url.origin !== location.origin) return;
+  /* 앱을 열 때는 브라우저 캐시를 거치지 않고 항상 새 파일을 받는다 */
+  var isDoc = (e.request.mode === "navigate") ||
+              (e.request.headers.get("accept") || "").indexOf("text/html") >= 0;
+  var req = isDoc ? new Request(e.request.url, {
+      cache: "no-store", credentials: "same-origin", redirect: "follow"
+    }) : e.request;
   e.respondWith(
-    fetch(e.request).then(function(res){
+    fetch(req).then(function(res){
       var copy = res.clone();
       caches.open(CACHE).then(function(c){ c.put(e.request, copy); }).catch(function(){});
       return res;
