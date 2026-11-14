@@ -302,7 +302,12 @@
     Object.keys(ks).forEach(function(nm){ if(nm !== myName) out[nm] = ks[nm]; });
     return out;
   }
-  var VARIANTS = 6, dialWide = {};
+  var VARIANTS = 4, dialWide = {}, VAR_KEY = "jhwt.var";
+  function varStore(){ try{ return JSON.parse(localStorage.getItem(VAR_KEY)||"{}"); }catch(e){ return {}; } }
+  function rememberVar(nm, v){
+    var m = varStore(); if(m[nm] === v) return;
+    m[nm] = v; try{ localStorage.setItem(VAR_KEY, JSON.stringify(m)); }catch(e){}
+  }
   function connectedTo(key){
     for(var v=1; v<=VARIANTS; v++) if(conns[peerIdOf(key,v)]) return true;
     return false;
@@ -315,14 +320,22 @@
     Object.keys(t).forEach(function(nm){
       var key = t[nm];
       if(!key || key === myKey) return;
-      if(connectedTo(key)){ dialWide[nm] = 2; return; }
-      var w = dialWide[nm] || 2;
-      for(var v=1; v<=w; v++){
-        var id = peerIdOf(key, v);
+      if(connectedTo(key)){
+        dialWide[nm] = 1;
+        for(var cv=1; cv<=VARIANTS; cv++) if(conns[peerIdOf(key,cv)]) { rememberVar(nm, cv); break; }
+        return;
+      }
+      /* 지난번에 찾았던 자리를 먼저, 그 다음 1번부터 하나씩 넓혀간다 */
+      var order = [], last = varStore()[nm];
+      if(last) order.push(last);
+      var w = dialWide[nm] || 1;
+      for(var v=1; v<=w; v++) if(order.indexOf(v) < 0) order.push(v);
+      for(var i=0; i<order.length; i++){
+        var id = peerIdOf(key, order[i]);
         if(conns[id] || pending[id]) continue;
         reach(id);
       }
-      dialWide[nm] = Math.min(VARIANTS, w + 2);   /* 못 찾으면 다음엔 더 넓게 */
+      dialWide[nm] = Math.min(VARIANTS, w + 1);
     });
   }
 
@@ -548,7 +561,9 @@
       var t=setTimeout(function(){ if(!done){ done=true; try{p.destroy();}catch(e){} res(false);} },8000);
       p.on("open", function(){
         if(done) return; done=true; clearTimeout(t);
-        peer=p; myPeerId=id; mySlot=slot||0; res(true);
+        peer=p; myPeerId=id; mySlot=slot||0;
+        try{ showVer("자리 " + id.split("-").slice(2).join("-")); }catch(e){}
+        res(true);
       });
       p.on("error", function(){ if(done) return; done=true; clearTimeout(t); try{p.destroy();}catch(e){} res(false); });
     });
@@ -645,7 +660,7 @@
   function pendingCount(){ return Object.keys(pending).length; }
   function reach(id){
     if(!peer || conns[id] || pending[id]) return;
-    if(pendingCount() >= 12) return;         /* 한꺼번에 너무 많이 열지 않는다 */
+    if(pendingCount() >= 5) return;          /* 한꺼번에 너무 많이 열지 않는다 */
     try{
       var dc = peer.connect(id, {reliable:true, metadata:{name:myName}});
       wireData(dc, false);
@@ -1244,9 +1259,15 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "34", newV = "", applying = false;
-  var BUILT = "2026-11-13 17:50";
-  try{ document.getElementById("ver").textContent = "버전 " + APPV + " · " + BUILT; }catch(e){}
+  var APPV = "35", newV = "", applying = false;
+  var BUILT = "2026-11-14 09:11";
+  function showVer(extra){
+    try{
+      document.getElementById("ver").textContent =
+        "버전 " + APPV + " · " + BUILT + (extra ? " · " + extra : "");
+    }catch(e){}
+  }
+  showVer();
   async function checkVersion(){
     if(applying) return;
     try{
