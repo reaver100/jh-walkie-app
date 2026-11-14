@@ -171,7 +171,7 @@
       · 처음 접속할 때 <b>마이크 권한</b>을 허용해 주세요.<br>
       · 같은 공간에서 쓸 때는 하울링 방지를 위해 <b>이어폰</b>을 권장합니다.<br>
       · 접속 중에는 화면이 자동으로 꺼지지 않습니다.<br>
-      · 최대 8명까지 들어올 수 있습니다.
+      · 가족끼리 서로 다른 이름을 쓰면 됩니다.
     </div>
     <div id="ver"></div>
   </section>
@@ -205,7 +205,7 @@
 
   var peer=null, mySlot=0, channel=CHANNEL, myName="";
   var micStream=null, micTrack=null;
-  var conns={}, pending={}, calls={}, clones={}, names={}, talking={}, dmFrom={}, lastSeen={};
+  var conns={}, pending={}, calls={}, clones={}, names={}, talking={}, talkAt={}, dmFrom={}, lastSeen={};
   var joined=false, txing=false, txIds=[], target="";
   var wakeLock=null, ac=null, keepAlive=null;
   var scanTimer=null, pingTimer=null, memberTimer=null, rebuilding=false;
@@ -577,7 +577,7 @@
   async function claimMine(){
     if(!myKey) await initKey();
     for(var v=1; v<=VARIANTS; v++) if(await claimId(peerIdOf(myKey, v))) return true;
-    for(var n=1; n<=SLOTS; n++) if(await claimId(idFor(n), n)) return true;   /* 마지막 수단 */
+    for(var n=1; n<=4; n++) if(await claimId(idFor(n), n)) return true;      /* 마지막 수단 */
     return false;
   }
   /* 마이크를 들고 있으면 아이폰이 블루투스 이어폰을 통화 모드로 바꿔
@@ -634,6 +634,8 @@
     }catch(e){ return false; }
     try{ micStream = await p; }catch(e){ return false; }
     micTrack = micStream.getAudioTracks()[0];
+    /* 이어폰을 꽂거나 빼면 마이크 트랙이 끊긴다 — 다음 말하기에서 다시 잡게 한다 */
+    try{ micTrack.onended = function(){ if(!txing) releaseMic(); }; }catch(e){}
     audioSession("play-and-record");
     Object.keys(conns).forEach(function(id){
       var t = micTrack.clone(); t.enabled = false; swapOut(id, t);
@@ -641,6 +643,13 @@
     micHoldBump();
     return true;
   }
+  /* 소리 장치가 바뀌면(이어폰 연결·해제) 마이크를 놓아 다음에 새 장치로 잡게 한다 */
+  try{
+    navigator.mediaDevices && navigator.mediaDevices.addEventListener &&
+    navigator.mediaDevices.addEventListener("devicechange", function(){
+      if(!txing && !pttHeld && micStream) releaseMic();
+    });
+  }catch(e){}
   function releaseMic(){
     clearTimeout(micTimer); micTimer = null;
     Object.keys(conns).forEach(function(id){ swapOut(id, silentTrack()); });
@@ -701,7 +710,11 @@
         if(m.key) rememberKey(m.name, m.key);
         if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName, pid:myPid, key:myKey}); }catch(e){} }
       }
-      else if(m.t==="talk"){ talking[id]=true; dmFrom[id]=!!m.dm; cueIncoming(!!m.dm); }
+      else if(m.t==="talk"){
+        var wasTalking = talking[id];
+        talking[id]=true; talkAt[id]=Date.now(); dmFrom[id]=!!m.dm;
+        if(!wasTalking) cueIncoming(!!m.dm);
+      }
       else if(m.t==="stop"){ talking[id]=false; dmFrom[id]=false; }
       else if(m.t==="bye"){ drop(id); return; }
       render();
@@ -759,7 +772,7 @@
     try{ pending[id] && pending[id].close(); }catch(e){}
     try{ calls[id] && calls[id].close(); }catch(e){}
     delete conns[id]; delete pending[id]; delete calls[id]; delete names[id];
-    delete talking[id]; delete dmFrom[id]; delete lastSeen[id];
+    delete talking[id]; delete talkAt[id]; delete dmFrom[id]; delete lastSeen[id];
     if(clones[id]){ clones[id].getTracks().forEach(function(t){t.stop();}); delete clones[id]; }
     if(outTrack[id]){ try{ outTrack[id].stop(); }catch(e){} delete outTrack[id]; }
     var el=document.getElementById("a-"+id); if(el) el.remove();
@@ -800,8 +813,10 @@
     peer.on("open", function(){ setPill(); });
   }
 
+  var lastRebuildFail = 0;
   async function rebuildPeer(){
     if(rebuilding || !joined) return;
+    if(Date.now() - lastRebuildFail < 15000) return;   /* 실패 직후엔 잠시 쉰다 */
     rebuilding = true;
     setPill("재연결 중…");
     try{
@@ -822,7 +837,8 @@
         dialKnown();
         setPill();
       }else{
-        setPill("재연결 실패 — 다시 시도");
+        lastRebuildFail = Date.now();
+        setPill("재연결 실패 — 잠시 후 다시 시도");
       }
       render();
     } finally { rebuilding = false; }
@@ -842,6 +858,14 @@
     openIds().forEach(function(id){
       if(!calls[id]) placeCall(id, true);
     });
+    // 15초 넘게 소식 없는 '말하는 중' 은 해제한다
+    var tnow = Date.now(), changed = false;
+    for(var tk in talking){
+      if(talking[tk] && tnow - (talkAt[tk] || 0) > 15000){
+        talking[tk] = false; dmFrom[tk] = false; changed = true;
+      }
+    }
+    if(changed) render();
     // 응답 없는 상대 정리
     var now = Date.now();
     openIds().forEach(function(id){
@@ -1012,9 +1036,16 @@
     });
     ptt.classList.add("down"); ptt.textContent="송신 중…";
     beep(1100,0.07,0.05); buzz(25);
+    clearInterval(txKeep);
+    txKeep = setInterval(function(){
+      if(!txing){ clearInterval(txKeep); return; }
+      txIds.forEach(function(id){ try{ conns[id].send({t:"talk", dm:true}); }catch(e){} });
+    }, 5000);
   }
+  var txKeep = null;
   function stopTx(){
     pttHeld = false;
+    clearInterval(txKeep); txKeep = null;
     if(!txing){ if(micTrack) micHoldBump(); return; }
     txing=false;
     micHoldBump();
@@ -1274,8 +1305,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "36", newV = "", applying = false;
-  var BUILT = "2026-11-14 09:16";
+  var APPV = "37", newV = "", applying = false;
+  var BUILT = "2026-11-14 09:27";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
@@ -1299,9 +1330,14 @@
     for(var k in talking) if(talking[k]) return true;
     return false;
   }
+  var deferSince = 0;
   function applyUpdate(){
     if(!newV || applying) return;
-    if(busy()){ setTimeout(applyUpdate, 5000); return; }   /* 대화 중이면 미룬다 */
+    if(busy()){                                   /* 대화 중이면 미루되, 2분을 넘기지 않는다 */
+      if(!deferSince) deferSince = Date.now();
+      if(Date.now() - deferSince < 120000){ setTimeout(applyUpdate, 5000); return; }
+    }
+    deferSince = 0;
     applying = true;
     toast("새 버전 적용 중…");
     try{
