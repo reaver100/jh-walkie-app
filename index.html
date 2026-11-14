@@ -565,9 +565,15 @@
         try{ showVer("자리 " + id.split("-").slice(2).join("-")); }catch(e){}
         res(true);
       });
-      p.on("error", function(){ if(done) return; done=true; clearTimeout(t); try{p.destroy();}catch(e){} res(false); });
+      p.on("error", function(e){
+        if(done) return; done=true; clearTimeout(t);
+        lastClaimErr = (e && e.type) || "unknown";
+        try{p.destroy();}catch(e2){}
+        res(false);
+      });
     });
   }
+  var lastClaimErr = "";
   async function claimMine(){
     if(!myKey) await initKey();
     for(var v=1; v<=VARIANTS; v++) if(await claimId(peerIdOf(myKey, v))) return true;
@@ -889,7 +895,16 @@
     ok = await claimMine();
     if(!ok){
       joinBtn.disabled=false; joinBtn.textContent="접속하기";
-      toast("채널이 가득 찼거나 연결에 실패했습니다");
+      if(lastClaimErr === "browser-incompatible"){
+        toast("브라우저를 완전히 종료했다 다시 열어 주세요 (설정 → 앱 → Chrome → 강제 중지)");
+        showVer("브라우저 재시작 필요");
+      } else if(lastClaimErr === "network" || lastClaimErr === "server-error"){
+        toast("신호 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요");
+        showVer("신호 서버 연결 실패");
+      } else {
+        toast("접속에 실패했습니다 (" + (lastClaimErr || "원인 불명") + ")");
+        showVer("접속 실패: " + (lastClaimErr || "원인 불명"));
+      }
       return;
     }
 
@@ -1259,8 +1274,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "35", newV = "", applying = false;
-  var BUILT = "2026-11-14 09:11";
+  var APPV = "36", newV = "", applying = false;
+  var BUILT = "2026-11-14 09:16";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
