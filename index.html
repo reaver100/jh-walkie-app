@@ -311,9 +311,14 @@
   /* 내가 아는 가족 번호를 상대에게 알려준다.
      번호가 바뀌어 서로 못 찾는 둘도, 양쪽을 아는 한 명이 있으면 이어진다. */
   function peerList(){
-    var ks = keyStore(), out = [];
-    Object.keys(ks).forEach(function(nm){ if(ks[nm]) out.push({ n:nm, k:ks[nm] }); });
-    if(myKey && myName) out.push({ n:myName, k:myKey });
+    var ks = keyStore(), pm = pidMap(), seen = {}, out = [];
+    function add(nm, k, pid){
+      if(!nm || seen[nm]) return;
+      seen[nm] = 1; out.push({ n:nm, k:k||"", p:pid||"" });
+    }
+    if(myName) add(myName, myKey, myPid);                 /* 내 번호 */
+    Object.keys(ks).forEach(function(nm){ add(nm, ks[nm], pm[nm]); });
+    Object.keys(pm).forEach(function(nm){ add(nm, ks[nm], pm[nm]); });
     return out.slice(0, 12);
   }
   function sendPeers(dc){
@@ -737,7 +742,9 @@
       if(m.t==="peers" && Array.isArray(m.list)){
         for(var pi=0; pi<m.list.length; pi++){
           var it = m.list[pi];
-          if(it && it.n && it.k) rememberKey(it.n, it.k);
+          if(!it || !it.n) continue;
+          if(it.k) rememberKey(it.n, it.k);
+          if(it.p) rememberPid(it.n, it.p);        /* 호출용 번호도 함께 */
         }
         return;
       }
@@ -1176,7 +1183,7 @@
 
   /* 서버 명단을 읽을 수 없을 때 쓰는 기본 명단 */
   var ROSTER = [
-    { id:"d4d76091b5e7550acee327251bd6ffeb", name:"아빠" },
+    { id:"3ede4dd9be3e47ee2bee4133b51402b1", name:"아빠" },
     { id:"b0874d299fcdefcb9e6ee2b2412b6995", name:"엄마" },
     { id:"ea4edbbe6a17cd72a22d69a4f4268289", name:"아라" },
     { id:"32fc9ac4b2db3b62a50843dac758490d", name:"테블릿" },
@@ -1353,8 +1360,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "40", newV = "", applying = false;
-  var BUILT = "2026-11-18 20:41";
+  var APPV = "41", newV = "", applying = false;
+  var BUILT = "2026-11-18 21:58";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
