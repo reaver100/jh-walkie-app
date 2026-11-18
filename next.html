@@ -278,6 +278,8 @@
   function peerIdOf(key, v){ return NS+"-"+hash(channel)+"-"+key + (v>1 ? "-"+v : ""); }
 
   /* 내 번호: 알림을 켰으면 등록 번호에서, 아니면 이 기기 고유값에서 */
+  /* 자리는 이름에서 정한다. 알림 등록 번호는 폰 사정으로 바뀌지만 이름은 안 바뀐다. */
+  function nameKey(nm){ return "n" + hash("name:" + nm); }
   async function initKey(){
     try{
       if("serviceWorker" in navigator && "PushManager" in window && Notification.permission === "granted"){
@@ -285,24 +287,31 @@
         var sub = await reg.pushManager.getSubscription();
         if(sub){
           myEndpoint = sub.endpoint;
-          myPid = await pidOf(sub.endpoint);
-          myKey = myPid.slice(0,12);
-          return;
+          myPid = await pidOf(sub.endpoint);     /* 호출용 — 바뀔 수 있다 */
         }
       }
     }catch(e){}
-    myKey = devKey();
+    myKey = myName ? nameKey(myName) : devKey();  /* 연결용 — 이름에서, 안 바뀐다 */
   }
 
   /* 연락할 상대: 기본 명단 + 기억해 둔 번호 */
+  /* 상대를 찾을 자리 목록. 이름에서 계산한 자리가 1순위,
+     옛 버전(등록 번호 기반)도 당분간 함께 시도한다. */
   function targetKeys(){
     var out = {}, pm = pidMap(), ks = keyStore();
-    ROSTER.forEach(function(r){ if(r.name !== myName) out[r.name] = r.id.slice(0,12); });
-    Object.keys(pm).forEach(function(nm){ if(nm !== myName) out[nm] = pm[nm].slice(0,12); });
-    Object.keys(ks).forEach(function(nm){ if(nm !== myName) out[nm] = ks[nm]; });
+    function put(nm, k){
+      if(!nm || !k || nm === myName) return;
+      if(!out[nm]) out[nm] = [];
+      if(out[nm].indexOf(k) < 0) out[nm].push(k);
+    }
+    ROSTER.forEach(function(r){ put(r.name, nameKey(r.name)); });
+    Object.keys(ks).forEach(function(nm){ put(nm, nameKey(nm)); });
+    ROSTER.forEach(function(r){ put(r.name, r.id.slice(0,12)); });   /* 옛 방식 */
+    Object.keys(pm).forEach(function(nm){ put(nm, pm[nm].slice(0,12)); });
+    Object.keys(ks).forEach(function(nm){ put(nm, ks[nm]); });
     return out;
   }
-  var VARIANTS = 4, dialWide = {}, VAR_KEY = "jhwt.var";
+  var VARIANTS = 4, dialWide = {}, dialKi = {}, VAR_KEY = "jhwt.var";
   function varStore(){ try{ return JSON.parse(localStorage.getItem(VAR_KEY)||"{}"); }catch(e){ return {}; } }
   function rememberVar(nm, v){
     var m = varStore(); if(m[nm] === v) return;
@@ -334,13 +343,15 @@
     if(!peer) return;
     var t = targetKeys();
     Object.keys(t).forEach(function(nm){
-      var key = t[nm];
-      if(!key || key === myKey) return;
-      if(connectedTo(key)){
+      var keys = t[nm];
+      if(!keys || !keys.length) return;
+      for(var ki=0; ki<keys.length; ki++) if(connectedTo(keys[ki])){
         dialWide[nm] = 1;
-        for(var cv=1; cv<=VARIANTS; cv++) if(conns[peerIdOf(key,cv)]) { rememberVar(nm, cv); break; }
+        for(var cv=1; cv<=VARIANTS; cv++) if(conns[peerIdOf(keys[ki],cv)]) { rememberVar(nm, cv); break; }
         return;
       }
+      var key = keys[dialKi[nm] = ((dialKi[nm] || 0) + 1) % keys.length];
+      if(!key || key === myKey) return;
       /* 지난번에 찾았던 자리를 먼저, 그 다음 1번부터 하나씩 넓혀간다 */
       var order = [], last = varStore()[nm];
       if(last) order.push(last);
@@ -1360,8 +1371,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "41", newV = "", applying = false;
-  var BUILT = "2026-11-18 21:58";
+  var APPV = "42", newV = "", applying = false;
+  var BUILT = "2026-11-18 22:04";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
