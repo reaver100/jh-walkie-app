@@ -209,7 +209,7 @@
   var joined=false, txing=false, txIds=[], target="";
   var wakeLock=null, ac=null, keepAlive=null;
   var scanTimer=null, pingTimer=null, memberTimer=null, rebuilding=false;
-  var probeCursor=1, legacyTick=0;
+  var probeCursor=1, legacyTick=0, peersTick=0;
 
   /* ---------- 유틸 ---------- */
   var toastT;
@@ -307,6 +307,17 @@
   function rememberVar(nm, v){
     var m = varStore(); if(m[nm] === v) return;
     m[nm] = v; try{ localStorage.setItem(VAR_KEY, JSON.stringify(m)); }catch(e){}
+  }
+  /* 내가 아는 가족 번호를 상대에게 알려준다.
+     번호가 바뀌어 서로 못 찾는 둘도, 양쪽을 아는 한 명이 있으면 이어진다. */
+  function peerList(){
+    var ks = keyStore(), out = [];
+    Object.keys(ks).forEach(function(nm){ if(ks[nm]) out.push({ n:nm, k:ks[nm] }); });
+    if(myKey && myName) out.push({ n:myName, k:myKey });
+    return out.slice(0, 12);
+  }
+  function sendPeers(dc){
+    try{ dc.send({ t:"peers", list: peerList() }); }catch(e){}
   }
   function connectedTo(key){
     for(var v=1; v<=VARIANTS; v++) if(conns[peerIdOf(key,v)]) return true;
@@ -703,12 +714,20 @@
       lastSeen[id] = Date.now();
       if(m.t==="ping"){ try{ dc.send({t:"pong"}); }catch(e){} return; }
       if(m.t==="pong"){ return; }
+      if(m.t==="peers" && Array.isArray(m.list)){
+        for(var pi=0; pi<m.list.length; pi++){
+          var it = m.list[pi];
+          if(it && it.n && it.k) rememberKey(it.n, it.k);
+        }
+        return;
+      }
       if(m.t==="hi"){
         names[id]=m.name;
         rememberName(m.name);
         if(m.pid) rememberPid(m.name, m.pid);
         if(m.key) rememberKey(m.name, m.key);
         if(!dc.__greeted){ dc.__greeted = true; try{ dc.send({t:"hi", name:myName, pid:myPid, key:myKey}); }catch(e){} }
+        sendPeers(dc);
       }
       else if(m.t==="talk"){
         var wasTalking = talking[id];
@@ -858,6 +877,9 @@
     openIds().forEach(function(id){
       if(!calls[id]) placeCall(id, true);
     });
+    // 20초마다 서로 아는 번호를 나눈다
+    peersTick++;
+    if(peersTick % 5 === 0) openIds().forEach(function(id){ sendPeers(conns[id]); });
     // 15초 넘게 소식 없는 '말하는 중' 은 해제한다
     var tnow = Date.now(), changed = false;
     for(var tk in talking){
@@ -1128,11 +1150,11 @@
 
   /* 서버 명단을 읽을 수 없을 때 쓰는 기본 명단 */
   var ROSTER = [
-    { id:"3780688c546bbc5ab27be58c8875f0cb", name:"아빠" },
+    { id:"d4d76091b5e7550acee327251bd6ffeb", name:"아빠" },
     { id:"b0874d299fcdefcb9e6ee2b2412b6995", name:"엄마" },
     { id:"ea4edbbe6a17cd72a22d69a4f4268289", name:"아라" },
     { id:"32fc9ac4b2db3b62a50843dac758490d", name:"테블릿" },
-    { id:"54c233007641913f57a6a404b3726824", name:"이든" }
+    { id:"7df15d3b2ad663126d21f06b8f444775", name:"이든" }
   ];
   var ROSTER_KEY = "jhwt.roster";
 
@@ -1305,8 +1327,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "37", newV = "", applying = false;
-  var BUILT = "2026-11-14 09:27";
+  var APPV = "38", newV = "", applying = false;
+  var BUILT = "2026-11-18 20:30";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
