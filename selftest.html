@@ -13,6 +13,8 @@ function log(n, ok, d){ R.push({ 항목:n, 결과: ok ? "통과" : "실패", 비
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function boot(name, key){
+  /* 앱은 가족 이름만 기억하므로, 점검도 가족 이름으로 하고 번호를 미리 심어 둔다 */
+  localStorage.setItem("jhwt.keys", JSON.stringify({ "아빠":"aa00bb00cc01", "엄마":"dd00ee00ff02" }));
   localStorage.setItem("jhwt.devkey", key);
   localStorage.setItem("wt", JSON.stringify({ n: name }));
   const f = document.createElement("iframe");
@@ -27,16 +29,16 @@ const roster = f => [...D(f).querySelectorAll("#roster .row")].filter(r=>!r.clas
 
 (async () => {
   try {
-    const A = await boot("점검가", "aa00bb00cc01");
+    const A = await boot("아빠", "aa00bb00cc01");
     for (let i=0;i<30 && !live(A);i++) await sleep(500);
     log("접속 (1번 기기)", live(A), D(A).getElementById("ver")?.textContent || "");
 
-    const B = await boot("점검나", "dd00ee00ff02");
+    const B = await boot("엄마", "dd00ee00ff02");
     for (let i=0;i<30 && !live(B);i++) await sleep(500);
     log("접속 (2번 기기)", live(B));
 
     let ok=false;
-    for (let i=0;i<40;i++){ if (roster(A).includes("점검나") && roster(B).includes("점검가")) { ok=true; break; } await sleep(500); }
+    for (let i=0;i<40;i++){ if (roster(A).includes("엄마") && roster(B).includes("아빠")) { ok=true; break; } await sleep(500); }
     log("서로 찾기", ok, "1번:"+roster(A).join(",")+" / 2번:"+roster(B).join(","));
 
     // 음성 전달
@@ -49,7 +51,7 @@ const roster = f => [...D(f).querySelectorAll("#roster .row")].filter(r=>!r.clas
       const timer = setInterval(() => { an.getFloatTimeDomainData(buf);
         let s=0; for(let i=0;i<buf.length;i++) s+=buf[i]*buf[i];
         const v = Math.sqrt(s/buf.length); if (v>heard) heard = v; }, 100);
-      const row = [...D(A).querySelectorAll("#roster .row")].find(r=>r.querySelector(".nm")?.textContent==="점검나");
+      const row = [...D(A).querySelectorAll("#roster .row")].find(r=>r.querySelector(".nm")?.textContent==="엄마");
       if (row) { row.click(); await sleep(500); }
       const ptt = D(A).getElementById("ptt"), W = A.contentWindow;
       ptt.dispatchEvent(new W.PointerEvent("pointerdown",{bubbles:true,pointerId:1}));
@@ -63,7 +65,7 @@ const roster = f => [...D(f).querySelectorAll("#roster .row")].filter(r=>!r.clas
     // 마이크 반납
     await sleep(2000);
     log("말하기 종료", D(A).getElementById("ptt").textContent.indexOf("누르고") >= 0);
-    log("연결 유지", roster(A).includes("점검나"));
+    log("연결 유지", roster(A).includes("엄마"));
   } catch (e) {
     log("예외 발생", false, e.name + ": " + e.message);
   }
