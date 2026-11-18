@@ -42,8 +42,12 @@ const roster = f => [...D(f).querySelectorAll("#roster .row")].filter(r=>!r.clas
     log("서로 찾기", ok, "1번:"+roster(A).join(",")+" / 2번:"+roster(B).join(","));
 
     // 음성 전달
-    let heard = 0;
-    const el = [...D(B).querySelectorAll('audio[id^="a-"]')].find(a=>a.srcObject);
+    let heard = 0, el = null;
+    for (let i=0;i<30;i++){                       /* 음성 연결이 붙을 때까지 기다린다 */
+      el = [...D(B).querySelectorAll('audio[id^="a-"]')].find(a=>a.srcObject);
+      if (el) break;
+      await sleep(500);
+    }
     log("음성 연결 생성", !!el);
     if (el) {
       const ac = new AudioContext(), src = ac.createMediaStreamSource(el.srcObject), an = ac.createAnalyser();
