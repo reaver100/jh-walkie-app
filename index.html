@@ -635,19 +635,24 @@
     clearTimeout(micTimer);
     micTimer = setTimeout(function(){ if(!txing && !pttHeld) releaseMic(); }, MIC_HOLD);
   }
+  var micErr = "";
   async function acquireMic(){
     if(micTrack && micTrack.readyState === "live"){ micHoldBump(); return true; }
+    /* 아이폰은 소리 경로가 '재생 전용'이면 마이크를 내주지 않는다.
+       반드시 요청 '전에' 녹음 가능한 경로로 바꿔야 한다. */
+    audioSession("play-and-record");
+    micErr = "";
     var p;
     try{
       p = navigator.mediaDevices.getUserMedia({
         audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}, video:false
       });
-    }catch(e){ return false; }
-    try{ micStream = await p; }catch(e){ return false; }
+    }catch(e){ micErr = (e && e.name) || "요청 실패"; audioSession("playback"); return false; }
+    try{ micStream = await p; }
+    catch(e){ micErr = (e && e.name) || "거부됨"; audioSession("playback"); return false; }
     micTrack = micStream.getAudioTracks()[0];
     /* 이어폰을 꽂거나 빼면 마이크 트랙이 끊긴다 — 다음 말하기에서 다시 잡게 한다 */
     try{ micTrack.onended = function(){ if(!txing) releaseMic(); }; }catch(e){}
-    audioSession("play-and-record");
     Object.keys(conns).forEach(function(id){
       var t = micTrack.clone(); t.enabled = false; swapOut(id, t);
     });
@@ -1034,7 +1039,13 @@
       if(!ok){
         pttHeld = false;
         ptt.classList.remove("down"); ptt.textContent="누르고 말하기";
-        toast("마이크 권한이 필요합니다. 설정에서 마이크를 허용해 주세요");
+        if(micErr === "NotAllowedError"){
+          toast("마이크가 차단돼 있습니다 — 설정 → Safari → 웹사이트 설정 → 마이크를 '확인'으로 바꾼 뒤 앱을 다시 열어 주세요");
+        } else if(micErr === "NotFoundError" || micErr === "NotReadableError"){
+          toast("마이크를 쓸 수 없습니다 (" + micErr + ") — 통화·녹음 중인 앱이 있으면 닫고 다시 시도해 주세요");
+        } else {
+          toast("마이크를 열지 못했습니다: " + (micErr || "원인 불명"));
+        }
         return;
       }
       if(!pttHeld){                      /* 기다리는 사이에 손을 뗐다 */
@@ -1327,8 +1338,8 @@
   /* ---------- 새 버전 자동 반영 ----------
      앱을 끄지 않아도 새 버전을 스스로 받아 적용한다.
      말하는 중이거나 상대가 말하는 중에는 미루고, 조용할 때 적용한다. */
-  var APPV = "38", newV = "", applying = false;
-  var BUILT = "2026-11-18 20:30";
+  var APPV = "39", newV = "", applying = false;
+  var BUILT = "2026-11-18 20:37";
   function showVer(extra){
     try{
       document.getElementById("ver").textContent =
