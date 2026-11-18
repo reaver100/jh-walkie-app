@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><title>무전기 자동 점검</title>
+<style>body{font:14px/1.6 system-ui;margin:16px;background:#0d1117;color:#e6edf3}
+pre{background:#161b22;padding:12px;border-radius:8px;white-space:pre-wrap}
+iframe{width:340px;height:460px;border:1px solid #30363d;border-radius:8px;margin-right:8px}</style>
+</head><body>
+<h3>무전기 자동 점검</h3><pre id="out">준비 중…</pre><div id="frames"></div>
+<script>
+const CH = "test-" + Math.random().toString(36).slice(2, 7);
+const R = []; window.__done = false; window.__results = R;
+const out = document.getElementById("out");
+function log(n, ok, d){ R.push({ 항목:n, 결과: ok ? "통과" : "실패", 비고: d||"" }); out.textContent = R.map(r=>`${r.결과==="통과"?"✅":"❌"} ${r.항목}${r.비고?"  — "+r.비고:""}`).join("\n"); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function boot(name, key){
+  localStorage.setItem("jhwt.devkey", key);
+  localStorage.setItem("wt", JSON.stringify({ n: name }));
+  const f = document.createElement("iframe");
+  f.src = "index.html?join=1&fakemic=1&ch=" + CH + "&n=" + Date.now();
+  document.getElementById("frames").appendChild(f);
+  await new Promise(r => f.onload = r);
+  return f;
+}
+const D = f => f.contentDocument;
+const live = f => getComputedStyle(D(f).getElementById("live")).display !== "none";
+const roster = f => [...D(f).querySelectorAll("#roster .row")].filter(r=>!r.classList.contains("off")).map(r=>r.querySelector(".nm")?.textContent);
+
+(async () => {
+  try {
+    const A = await boot("점검가", "aa00bb00cc01");
+    for (let i=0;i<30 && !live(A);i++) await sleep(500);
+    log("접속 (1번 기기)", live(A), D(A).getElementById("ver")?.textContent || "");
+
+    const B = await boot("점검나", "dd00ee00ff02");
+    for (let i=0;i<30 && !live(B);i++) await sleep(500);
+    log("접속 (2번 기기)", live(B));
+
+    let ok=false;
+    for (let i=0;i<40;i++){ if (roster(A).includes("점검나") && roster(B).includes("점검가")) { ok=true; break; } await sleep(500); }
+    log("서로 찾기", ok, "1번:"+roster(A).join(",")+" / 2번:"+roster(B).join(","));
+
+    // 음성 전달
+    let heard = 0;
+    const el = [...D(B).querySelectorAll('audio[id^="a-"]')].find(a=>a.srcObject);
+    log("음성 연결 생성", !!el);
+    if (el) {
+      const ac = new AudioContext(), src = ac.createMediaStreamSource(el.srcObject), an = ac.createAnalyser();
+      an.fftSize = 2048; src.connect(an); const buf = new Float32Array(an.fftSize);
+      const timer = setInterval(() => { an.getFloatTimeDomainData(buf);
+        let s=0; for(let i=0;i<buf.length;i++) s+=buf[i]*buf[i];
+        const v = Math.sqrt(s/buf.length); if (v>heard) heard = v; }, 100);
+      const row = [...D(A).querySelectorAll("#roster .row")].find(r=>r.querySelector(".nm")?.textContent==="점검나");
+      if (row) { row.click(); await sleep(500); }
+      const ptt = D(A).getElementById("ptt"), W = A.contentWindow;
+      ptt.dispatchEvent(new W.PointerEvent("pointerdown",{bubbles:true,pointerId:1}));
+      await sleep(4000);
+      const txing = ptt.textContent.indexOf("송신") >= 0;
+      ptt.dispatchEvent(new W.PointerEvent("pointerup",{bubbles:true,pointerId:1}));
+      clearInterval(timer);
+      log("마이크 획득 (말하기)", txing, ptt.textContent);
+      log("음성 전달", heard > 0.01, "수신 크기 " + heard.toFixed(3));
+    }
+    // 마이크 반납
+    await sleep(2000);
+    log("말하기 종료", D(A).getElementById("ptt").textContent.indexOf("누르고") >= 0);
+    log("연결 유지", roster(A).includes("점검나"));
+  } catch (e) {
+    log("예외 발생", false, e.name + ": " + e.message);
+  }
+  window.__done = true;
+  out.textContent += "\n\n" + (R.every(r=>r.결과==="통과") ? "전체 통과" : "실패 있음 — 올리면 안 됨");
+})();
+</script></body></html>
